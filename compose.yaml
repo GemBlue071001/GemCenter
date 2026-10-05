@@ -1,0 +1,38 @@
+name: gemcenter-local
+
+services:
+  floci:
+    image: floci/floci:latest
+    container_name: gemcenter-floci
+    ports:
+      - "127.0.0.1:4566:4566"
+    environment:
+      FLOCI_DEFAULT_REGION: us-east-1
+      FLOCI_HOSTNAME: floci
+      FLOCI_STORAGE_MODE: hybrid
+      FLOCI_STORAGE_PERSISTENT_PATH: /app/data
+      FLOCI_SERVICES_UI_ENABLED: "true"
+      FLOCI_SERVICES_UI_BIND_ADDRESS: 127.0.0.1
+      FLOCI_SERVICES_UI_PORT: "4500"
+    volumes:
+      # Required by FLoCI to run Lambda and its on-demand Web Console sidecar.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./.floci-data:/app/data
+
+  bootstrap:
+    build:
+      context: ./infra/bootstrap
+    container_name: gemcenter-bootstrap
+    depends_on:
+      - floci
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://floci:4566
+      # The Lambda runs in its own Docker container. Docker Desktop resolves this host name.
+      DYNAMODB_ENDPOINT: http://host.docker.internal:4566
+    volumes:
+      - ./backend:/workspace/backend:ro
+      - ./.floci-data:/state
+    restart: "no"

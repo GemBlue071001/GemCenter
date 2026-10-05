@@ -1,0 +1,41 @@
+# Local AWS emulation state (FLoCI)
+.floci-data/
+
+# Secrets and machine-specific configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Node.js / Lambda build output
+node_modules/
+dist/
+build/
+coverage/
+.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.zip
+
+# AWS deployment artefacts
+.aws-sam/
+.serverless/
+cdk.out/
+.cdk.staging/
+
+# Terraform local state, if it is introduced later
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+
+# Editors and operating systems
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
