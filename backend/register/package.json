@@ -1,0 +1,10 @@
+{
+  "name": "gemcenter-register-lambda",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Public registration and protected check-in API for GemCenter events.",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/client-sqs": "^3.0.0"
+  }
+}

@@ -32,6 +32,10 @@ services:
       AWS_ENDPOINT_URL: http://floci:4566
       # The Lambda runs in its own Docker container. Docker Desktop resolves this host name.
       DYNAMODB_ENDPOINT: http://host.docker.internal:4566
+      SQS_ENDPOINT: http://host.docker.internal:4566
+      SES_ENDPOINT: http://host.docker.internal:4566
+      FROM_EMAIL: no-reply@gemcenter.local
+      EXPOSE_TICKET_TOKEN: "true"
     volumes:
       - ./backend:/workspace/backend:ro
       - ./.floci-data:/state

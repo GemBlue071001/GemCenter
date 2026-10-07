@@ -3,8 +3,10 @@
 This starter stack runs the first backend slice locally with [FLoCI](https://floci.io/aws/):
 
 - DynamoDB table: `gemcenter-attendees`
-- Lambda: `gemcenter-register`
-- API Gateway v2 HTTP API: `POST /registrations`
+- API Lambda: `gemcenter-register` (registration, attendee list and check-in)
+- SQS queue + DLQ: `gemcenter-ticket-email` and `gemcenter-ticket-email-dlq`
+- Mailer Lambda: `gemcenter-ticket-mailer` (creates QR and sends ticket email through SES)
+- API Gateway v2 HTTP API: `POST /registrations`, `GET /attendees`, `POST /check-ins`
 - FLoCI Web Console for viewing resources and DynamoDB data
 
 ## Prerequisite
@@ -41,7 +43,33 @@ $body = @{
 Invoke-RestMethod -Method Post -Uri $apiUrl -ContentType 'application/json' -Body $body
 ```
 
-The response contains a temporary `ticketToken`; the next backend slice will convert it to a QR image and email it. It is intentionally opaque and does not expose personal data.
+The response has `emailStatus: "queued"` when the ticket-email job is accepted. The Mailer Lambda consumes the queue asynchronously; open **SES Mailbox** in the FLoCI Console to inspect the QR. Local uses an embedded data-URI preview because FLoCI does not resolve `cid:` attachments; production AWS SES uses a normal inline PNG attachment. If SES fails, SQS retries the job up to three times before sending it to the DLQ. `EXPOSE_TICKET_TOKEN=true` exists only in local Compose so the check-in flow can be tested; do not enable it in production.
+
+## Test protected attendee routes locally
+
+`GET /attendees` and `POST /check-ins` require the JWT claim `cognito:groups` to contain `checkin-staff`. In the FLoCI Console, invoke the Lambda directly with this event after registering an attendee. Replace `PASTE_TICKET_TOKEN` with the token returned by registration:
+
+```json
+{
+  "version": "2.0",
+  "routeKey": "POST /check-ins",
+  "requestContext": {
+    "http": { "method": "POST", "path": "/check-ins" },
+    "authorizer": {
+      "jwt": {
+        "claims": {
+          "sub": "local-checkin-staff",
+          "email": "staff@example.test",
+          "cognito:groups": "checkin-staff"
+        }
+      }
+    }
+  },
+  "body": "{\"ticketToken\":\"PASTE_TICKET_TOKEN\"}"
+}
+```
+
+The first check-in returns HTTP `200`; scanning the same ticket again returns `409`. For production, configure a Cognito JWT authorizer in API Gateway on both protected routes. The Lambda also rejects missing or insufficient claims with `401` or `403`.
 
 ## Useful commands
 

@@ -1,0 +1,11 @@
+{
+  "name": "gemcenter-ticket-mailer-lambda",
+  "private": true,
+  "version": "0.1.0",
+  "description": "SQS ticket-email worker for GemCenter events.",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/client-sesv2": "^3.0.0",
+    "qrcode": "^1.5.4"
+  }
+}

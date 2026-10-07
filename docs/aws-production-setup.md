@@ -1,5 +1,7 @@
 # Triển khai registration API lên AWS
 
+> Luồng email trong code hiện tại dùng SQS + Mailer Lambda. Xem [email-delivery-architecture.md](email-delivery-architecture.md) để cấp đúng IAM permissions và event-source mapping cho hai Lambda.
+
 Tài liệu này tạo bản production đầu tiên của backend đăng ký sự kiện:
 
 ```text
@@ -44,7 +46,7 @@ $accountId = (aws sts get-caller-identity --query Account --output text)
 
 ## 2. Tạo DynamoDB table
 
-Bảng dùng single-table keys `PK` + `SK`. GSI1 phục vụ truy tìm application theo email ở phase admin sau này.
+Bảng dùng single-table keys `PK` + `SK`. GSI1 phục vụ tìm theo email; GSI2 phục vụ tìm attendee từ hash ticket quét từ QR.
 
 ```powershell
 aws dynamodb create-table `
@@ -55,8 +57,10 @@ aws dynamodb create-table `
     AttributeName=SK,AttributeType=S `
     AttributeName=GSI1PK,AttributeType=S `
     AttributeName=GSI1SK,AttributeType=S `
+    AttributeName=GSI2PK,AttributeType=S `
+    AttributeName=GSI2SK,AttributeType=S `
   --key-schema AttributeName=PK,KeyType=HASH AttributeName=SK,KeyType=RANGE `
-  --global-secondary-indexes '[{"IndexName":"GSI1","KeySchema":[{"AttributeName":"GSI1PK","KeyType":"HASH"},{"AttributeName":"GSI1SK","KeyType":"RANGE"}],"Projection":{"ProjectionType":"ALL"}}]' `
+  --global-secondary-indexes '[{"IndexName":"GSI1","KeySchema":[{"AttributeName":"GSI1PK","KeyType":"HASH"},{"AttributeName":"GSI1SK","KeyType":"RANGE"}],"Projection":{"ProjectionType":"ALL"}},{"IndexName":"GSI2","KeySchema":[{"AttributeName":"GSI2PK","KeyType":"HASH"},{"AttributeName":"GSI2SK","KeyType":"RANGE"}],"Projection":{"ProjectionType":"ALL"}}]' `
   --region $env:AWS_REGION
 
 aws dynamodb wait table-exists --table-name $tableName --region $env:AWS_REGION
@@ -96,8 +100,8 @@ $tableArn = "arn:aws:dynamodb:$($env:AWS_REGION):$accountId`:table/$tableName"
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": ["dynamodb:PutItem"],
-      "Resource": "$tableArn"
+      "Action": ["dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem"],
+      "Resource": ["$tableArn", "$tableArn/index/*"]
     }
   ]
 }
@@ -113,7 +117,18 @@ aws iam attach-role-policy `
   --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 ```
 
-Không gắn `AmazonDynamoDBFullAccess`; Lambda này chỉ cần `PutItem` vào table của chính nó.
+Không gắn `AmazonDynamoDBFullAccess`; Lambda chỉ có quyền `PutItem`, `Query` và `UpdateItem` trên table và indexes của chính nó.
+
+Lambda cũng cần quyền gửi ticket email. Thêm inline policy SES:
+
+```powershell
+aws iam put-role-policy `
+  --role-name $roleName `
+  --policy-name "$project-register-ses" `
+  --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["ses:SendEmail"],"Resource":"*"}]}'
+```
+
+Trước khi deploy Lambda, verify domain/email sender trong Amazon SES tại cùng region và đặt `FROM_EMAIL` là địa chỉ thuộc identity đó. SES sandbox chỉ gửi được tới recipients đã verify; cần request production access trước event. [SES verified identities](https://docs.aws.amazon.com/ses/latest/dg/verify-addresses-and-domains.html)
 
 ## 4. Đóng gói Lambda
 
@@ -122,7 +137,7 @@ Production không dùng `DYNAMODB_ENDPOINT`: AWS SDK sẽ tự gọi DynamoDB th
 ```powershell
 Push-Location backend/register
 npm init -y
-npm install @aws-sdk/client-dynamodb
+npm install @aws-sdk/client-dynamodb @aws-sdk/client-sesv2 qrcode
 Compress-Archive -Path index.js,node_modules -DestinationPath ..\..\dist\gemcenter-register.zip -Force
 Pop-Location
 ```
@@ -141,7 +156,7 @@ aws lambda create-function `
   --role $roleArn `
   --timeout 10 `
   --memory-size 256 `
-  --environment "Variables={ATTENDEES_TABLE=$tableName}" `
+  --environment "Variables={ATTENDEES_TABLE=$tableName,FROM_EMAIL=no-reply@your-domain.com}" `
   --zip-file fileb://dist/gemcenter-register.zip `
   --region $env:AWS_REGION
 ```
@@ -178,8 +193,8 @@ $landingOrigin = 'https://event.gemcenter.com'
 
 $cors = @{
   AllowOrigins = @($landingOrigin)
-  AllowMethods = @('POST', 'OPTIONS')
-  AllowHeaders = @('content-type')
+  AllowMethods = @('GET', 'POST', 'OPTIONS')
+  AllowHeaders = @('content-type', 'authorization')
   MaxAge = 86400
 } | ConvertTo-Json -Compress
 
@@ -206,6 +221,18 @@ $integrationId = aws apigatewayv2 create-integration `
 aws apigatewayv2 create-route `
   --api-id $apiId `
   --route-key 'POST /registrations' `
+  --target "integrations/$integrationId" `
+  --region $env:AWS_REGION
+
+aws apigatewayv2 create-route `
+  --api-id $apiId `
+  --route-key 'GET /attendees' `
+  --target "integrations/$integrationId" `
+  --region $env:AWS_REGION
+
+aws apigatewayv2 create-route `
+  --api-id $apiId `
+  --route-key 'POST /check-ins' `
   --target "integrations/$integrationId" `
   --region $env:AWS_REGION
 
