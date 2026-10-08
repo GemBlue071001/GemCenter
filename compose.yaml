@@ -39,4 +39,5 @@ services:
     volumes:
       - ./backend:/workspace/backend:ro
       - ./.floci-data:/state
+      - ./.floci-data/npm-cache:/root/.npm
     restart: "no"

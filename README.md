@@ -27,7 +27,7 @@ Open the resource UI at [http://localhost:4566/_floci/ui](http://localhost:4566/
 
 ## Run the SAM API against FLoCI
 
-After the FLoCI bootstrap is ready, run `./scripts/run-sam-local.ps1` in another PowerShell window. The script builds [`template.local.yaml`](template.local.yaml), reads `.floci-data/local-stack.env`, writes an ignored `.floci-data/sam-local-env.json`, and starts the SAM API at `http://127.0.0.1:3000`. It gives the SAM Lambda local DynamoDB/SQS endpoints and temporary FLoCI credentials, then restores your shell's previous AWS environment when it exits. Use `http://127.0.0.1:3000/registrations` in the registration example below to exercise the API Lambda through SAM; FLoCI's queue mapping still invokes the FLoCI mailer. See [the SAM local guide](docs/sam-local-floci.md) for the exact steps and limitations.
+After the FLoCI bootstrap is ready, run `./scripts/run-sam-local.ps1` in another PowerShell window. The script uses [`template.local.yaml`](template.local.yaml) with the source directories directly, reads `.floci-data/local-stack.env`, writes an ignored `.floci-data/sam-local-env.json`, and starts the SAM API at `http://127.0.0.1:3000`. It installs local Node dependencies only when the manifest changes and restores your shell's previous AWS environment when it exits. Edit `backend/register/index.js`, save, and send the request again; no `sam build` or bootstrap rerun is needed. FLoCI's queue mapping still invokes the FLoCI mailer. See [the SAM local guide](docs/sam-local-floci.md) for the exact steps and limitations.
 
 ## Test the registration API
 
@@ -83,7 +83,7 @@ The first check-in returns HTTP `200`; scanning the same ticket again returns `4
 # Read provisioning output
 docker compose logs bootstrap
 
-# Re-run provisioning after changing backend/register/index.js
+# Re-run provisioning after changing backend/mailer/index.js, or to update FLoCI's uploaded register Lambda
 docker compose run --rm bootstrap
 
 # Stop containers, preserving local FLoCI data

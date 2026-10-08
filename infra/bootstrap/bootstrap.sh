@@ -105,19 +105,29 @@ package_lambda() {
   cp "${source_dir}/index.js" "${source_dir}/package.json" "${temp_dir}/"
   (
     cd "${temp_dir}"
-    npm install --omit=dev --no-audit --no-fund >/dev/null
+    npm install --omit=dev --prefer-offline --no-audit --no-fund >/dev/null
     zip -qr "${output_file}" index.js package.json node_modules
   )
 }
 
-package_lambda /workspace/backend/register /tmp/gemcenter-api.zip
-package_lambda /workspace/backend/mailer /tmp/gemcenter-mailer.zip
-
 deploy_lambda() {
   function_name="$1"
-  code_zip="$2"
-  role_arn="$3"
-  environment="$4"
+  source_dir="$2"
+  code_zip="$3"
+  role_arn="$4"
+  environment="$5"
+  hash_file="/state/${function_name}.sha256"
+  fingerprint="$({
+    cat "${source_dir}/index.js" "${source_dir}/package.json"
+    printf '%s\n' "${role_arn}" "${environment}"
+  } | sha256sum | cut -d ' ' -f 1)"
+  if [ -f "${hash_file}" ] && [ "$(cat "${hash_file}")" = "${fingerprint}" ] && \
+    aws_local lambda get-function --function-name "${function_name}" >/dev/null 2>&1; then
+    echo "Skipping unchanged local Lambda ${function_name}."
+    return
+  fi
+
+  package_lambda "${source_dir}" "${code_zip}"
   if aws_local lambda get-function --function-name "${function_name}" >/dev/null 2>&1; then
     # FLoCI's UpdateFunctionCode can block while it swaps a Docker-backed runtime.
     # Recreate is reliable for this local-only emulator and preserves DynamoDB/SQS state.
@@ -134,12 +144,13 @@ deploy_lambda() {
     --memory-size 256 \
     --environment "Variables=${environment}" \
     --zip-file "fileb://${code_zip}" >/dev/null
+  printf '%s\n' "${fingerprint}" > "${hash_file}"
 }
 
 api_environment="{ATTENDEES_TABLE=${table_name},EVENT_ID=${event_id},DYNAMODB_ENDPOINT=${DYNAMODB_ENDPOINT},SQS_ENDPOINT=${SQS_ENDPOINT},TICKET_EMAIL_QUEUE_URL=${lambda_queue_url},EXPOSE_TICKET_TOKEN=${EXPOSE_TICKET_TOKEN}}"
 mailer_environment="{ATTENDEES_TABLE=${table_name},EVENT_ID=${event_id},DYNAMODB_ENDPOINT=${DYNAMODB_ENDPOINT},SES_ENDPOINT=${SES_ENDPOINT},FROM_EMAIL=${FROM_EMAIL},EMAIL_PREVIEW_DATA_URI=true}"
-deploy_lambda "${api_function_name}" /tmp/gemcenter-api.zip "${api_role_arn}" "${api_environment}"
-deploy_lambda "${mailer_function_name}" /tmp/gemcenter-mailer.zip "${mailer_role_arn}" "${mailer_environment}"
+deploy_lambda "${api_function_name}" /workspace/backend/register /tmp/gemcenter-api.zip "${api_role_arn}" "${api_environment}"
+deploy_lambda "${mailer_function_name}" /workspace/backend/mailer /tmp/gemcenter-mailer.zip "${mailer_role_arn}" "${mailer_environment}"
 
 mapping_uuid="$(aws_local lambda list-event-source-mappings --function-name "${mailer_function_name}" --event-source-arn "${queue_arn}" --query 'EventSourceMappings[0].UUID' --output text)"
 if value_missing "${mapping_uuid}"; then

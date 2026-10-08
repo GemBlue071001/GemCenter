@@ -17,6 +17,41 @@ if (-not (Test-Path -LiteralPath $StateFile -PathType Leaf)) {
 if (-not (Get-Command sam -ErrorAction SilentlyContinue)) {
   throw 'AWS SAM CLI was not found. Install SAM CLI, then reopen PowerShell.'
 }
+if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+  throw 'npm was not found. Install Node.js, then reopen PowerShell.'
+}
+
+function Ensure-LocalDependencies {
+  param([string]$Name)
+
+  $sourceDir = Join-Path $projectRoot "backend/$Name"
+  $packageFile = Join-Path $sourceDir 'package.json'
+  $lockFile = Join-Path $sourceDir 'package-lock.json'
+  $modulesDir = Join-Path $sourceDir 'node_modules'
+  $markerFile = Join-Path $modulesDir '.gemcenter-local-deps-hash'
+  $manifestHash = (Get-FileHash -LiteralPath $packageFile -Algorithm SHA256).Hash
+  if (Test-Path -LiteralPath $lockFile -PathType Leaf) {
+    $manifestHash += ':' + (Get-FileHash -LiteralPath $lockFile -Algorithm SHA256).Hash
+  }
+
+  $installedHash = if (Test-Path -LiteralPath $markerFile -PathType Leaf) {
+    (Get-Content -LiteralPath $markerFile -Raw).Trim()
+  }
+  else { '' }
+  if ((Test-Path -LiteralPath $modulesDir -PathType Container) -and $installedHash -eq $manifestHash) {
+    return
+  }
+
+  Write-Host "Installing local dependencies for $Name..."
+  if (Test-Path -LiteralPath $lockFile -PathType Leaf) {
+    & npm ci --prefix $sourceDir --omit=dev --no-audit --no-fund
+  }
+  else {
+    & npm install --prefix $sourceDir --omit=dev --no-package-lock --no-audit --no-fund
+  }
+  if ($LASTEXITCODE -ne 0) { throw "npm install failed for $Name with exit code $LASTEXITCODE" }
+  [System.IO.File]::WriteAllText($markerFile, $manifestHash, [System.Text.UTF8Encoding]::new($false))
+}
 
 $localState = @{}
 foreach ($line in Get-Content -LiteralPath $StateFile) {
@@ -66,6 +101,8 @@ foreach ($name in $credentialNames) {
 
 Push-Location $projectRoot
 try {
+  Ensure-LocalDependencies -Name 'register'
+
   # These credentials are accepted only by the local FLoCI emulator.
   $env:AWS_ACCESS_KEY_ID = 'test'
   $env:AWS_SECRET_ACCESS_KEY = 'test'
@@ -74,13 +111,11 @@ try {
   $env:AWS_DEFAULT_REGION = 'us-east-1'
   $env:AWS_REGION = 'us-east-1'
 
-  & sam build --template-file template.local.yaml
-  if ($LASTEXITCODE -ne 0) { throw "sam build failed with exit code $LASTEXITCODE" }
-
   Write-Host "SAM API: http://127.0.0.1:$Port/registrations"
   Write-Host "FLoCI console: http://localhost:4566/_floci/ui"
   Write-Host "Local environment: $envFile"
-  & sam local start-api --template .aws-sam/build/template.yaml --env-vars $envFile --region us-east-1 --port $Port
+  Write-Host 'JavaScript edits under backend/register are picked up without sam build.'
+  & sam local start-api --template (Join-Path $projectRoot 'template.local.yaml') --env-vars $envFile --region us-east-1 --port $Port
   if ($LASTEXITCODE -ne 0) { throw "sam local start-api failed with exit code $LASTEXITCODE" }
 }
 finally {
