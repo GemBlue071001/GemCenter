@@ -1,5 +1,7 @@
 # Triển khai registration API lên AWS
 
+> **Tài liệu cũ, không dùng để deploy code hiện tại.** Hướng dẫn này mô tả kiến trúc trước khi thêm SQS + Mailer Lambda và có lệnh đóng gói dependency không còn đúng. Xem [SAM deploy](sam-deploy.md) và [`template.yaml`](../template.yaml).
+
 > Luồng email trong code hiện tại dùng SQS + Mailer Lambda. Xem [email-delivery-architecture.md](email-delivery-architecture.md) để cấp đúng IAM permissions và event-source mapping cho hai Lambda.
 
 Tài liệu này tạo bản production đầu tiên của backend đăng ký sự kiện:

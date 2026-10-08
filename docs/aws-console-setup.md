@@ -1,5 +1,7 @@
 # Tạo GemCenter registration API bằng AWS Console
 
+> **Tài liệu cũ, không dùng để deploy code hiện tại.** Hướng dẫn này mô tả kiến trúc trước khi thêm SQS + Mailer Lambda. Xem [SAM deploy](sam-deploy.md) và [`template.yaml`](../template.yaml).
+
 > Lưu ý: hướng dẫn khởi tạo DynamoDB, Cognito và API Gateway trong file này vẫn dùng được. Phần gửi email đã được tách thành SQS + Mailer Lambda; xem [email-delivery-architecture.md](email-delivery-architecture.md) để tạo quyền và resource email đúng với code hiện tại. Không gắn quyền SES trực tiếp cho API Lambda.
 
 Tài liệu này dùng **AWS Management Console**, không dùng AWS CLI để tạo resource. Mục tiêu của phase hiện tại:

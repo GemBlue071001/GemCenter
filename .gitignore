@@ -22,6 +22,7 @@ pnpm-debug.log*
 
 # AWS deployment artefacts
 .aws-sam/
+samconfig.toml
 .serverless/
 cdk.out/
 .cdk.staging/

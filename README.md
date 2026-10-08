@@ -1,5 +1,7 @@
 # GemCenter local AWS backend
 
+Production/staging deployment is defined in [`template.yaml`](template.yaml); follow [`docs/sam-deploy.md`](docs/sam-deploy.md). The Docker Compose bootstrap below is only for local FLoCI. Track outstanding production issues in [`docs/backend-issue-report.md`](docs/backend-issue-report.md).
+
 This starter stack runs the first backend slice locally with [FLoCI](https://floci.io/aws/):
 
 - DynamoDB table: `gemcenter-attendees`
@@ -22,6 +24,10 @@ docker compose up --build
 The `bootstrap` container waits for FLoCI then creates or updates the table, IAM role, Lambda and HTTP API. Its endpoint information is written to `.floci-data/local-stack.env`.
 
 Open the resource UI at [http://localhost:4566/_floci/ui](http://localhost:4566/_floci/ui). On its first visit FLoCI starts its Web Console sidecar; this can take a moment while Docker downloads the console image.
+
+## Run the SAM API against FLoCI
+
+After the FLoCI bootstrap is ready, run `./scripts/run-sam-local.ps1` in another PowerShell window. The script builds [`template.local.yaml`](template.local.yaml), reads `.floci-data/local-stack.env`, writes an ignored `.floci-data/sam-local-env.json`, and starts the SAM API at `http://127.0.0.1:3000`. It gives the SAM Lambda local DynamoDB/SQS endpoints and temporary FLoCI credentials, then restores your shell's previous AWS environment when it exits. Use `http://127.0.0.1:3000/registrations` in the registration example below to exercise the API Lambda through SAM; FLoCI's queue mapping still invokes the FLoCI mailer. See [the SAM local guide](docs/sam-local-floci.md) for the exact steps and limitations.
 
 ## Test the registration API
 

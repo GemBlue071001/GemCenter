@@ -1,0 +1,341 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: GemCenter registration, ticket email, and check-in backend.
+
+Parameters:
+  EventId:
+    Type: String
+    Description: Stable identifier for this event, for example iti-2026.
+    MinLength: 1
+    MaxLength: 64
+    AllowedPattern: '[A-Za-z0-9][A-Za-z0-9_-]*'
+  FromEmail:
+    Type: String
+    Description: SES-verified sender address in the deployment region.
+    AllowedPattern: '[^@\s]+@[^@\s]+\.[^@\s]+'
+  AllowedOrigin:
+    Type: String
+    Description: Exact landing-page origin, for example https://event.example.com.
+    AllowedPattern: 'https://[^/]+|http://localhost(:[0-9]+)?'
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures:
+      - x86_64
+    MemorySize: 256
+    Timeout: 30
+
+Resources:
+  AttendeesTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+        - AttributeName: GSI2PK
+          AttributeType: S
+        - AttributeName: GSI2SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: GSI2
+          KeySchema:
+            - AttributeName: GSI2PK
+              KeyType: HASH
+            - AttributeName: GSI2SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  TicketEmailDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  TicketEmailQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      # Six times the 30-second mailer timeout, per Lambda's SQS guidance.
+      VisibilityTimeout: 180
+      ReceiveMessageWaitTimeSeconds: 20
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt TicketEmailDeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  StaffUserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Sub '${AWS::StackName}-staff'
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+
+  StaffAppClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub '${AWS::StackName}-checkin'
+      UserPoolId: !Ref StaffUserPool
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+
+  CheckinStaffGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref StaffUserPool
+      GroupName: checkin-staff
+      Description: Staff allowed to list attendees and check in tickets.
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 30
+
+  RegistrationApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: '$default'
+      DefinitionBody:
+        openapi: '3.0.1'
+        info:
+          title: GemCenter registration API
+          version: '1.0'
+        paths: {}
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref AllowedOrigin
+        AllowHeaders:
+          - content-type
+          - authorization
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        MaxAge: 86400
+      Auth:
+        Authorizers:
+          StaffJwt:
+            IdentitySource: '$request.header.Authorization'
+            JwtConfiguration:
+              issuer: !Sub 'https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${StaffUserPool}'
+              audience:
+                - !Ref StaffAppClient
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","routeKey":"$context.routeKey","status":"$context.status","integrationError":"$context.integrationErrorMessage"}'
+
+  RegisterLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-register'
+      RetentionInDays: 30
+
+  RegisterFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: RegisterLogGroup
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-register'
+      CodeUri: backend/register/
+      Handler: index.handler
+      Environment:
+        Variables:
+          ATTENDEES_TABLE: !Ref AttendeesTable
+          EVENT_ID: !Ref EventId
+          TICKET_EMAIL_QUEUE_URL: !Ref TicketEmailQueue
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Sid: AttendeesReadWrite
+              Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:Query
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt AttendeesTable.Arn
+                - !Sub '${AttendeesTable.Arn}/index/*'
+            - Sid: QueueTicketEmail
+              Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt TicketEmailQueue.Arn
+      Events:
+        Register:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistrationApi
+            Path: /registrations
+            Method: POST
+            PayloadFormatVersion: '2.0'
+            Auth:
+              Authorizer: NONE
+        ListAttendees:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistrationApi
+            Path: /attendees
+            Method: GET
+            PayloadFormatVersion: '2.0'
+            Auth:
+              Authorizer: StaffJwt
+        CheckIn:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistrationApi
+            Path: /check-ins
+            Method: POST
+            PayloadFormatVersion: '2.0'
+            Auth:
+              Authorizer: StaffJwt
+
+  MailerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-ticket-mailer'
+      RetentionInDays: 30
+
+  MailerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: MailerLogGroup
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-ticket-mailer'
+      CodeUri: backend/mailer/
+      Handler: index.handler
+      Environment:
+        Variables:
+          ATTENDEES_TABLE: !Ref AttendeesTable
+          EVENT_ID: !Ref EventId
+          FROM_EMAIL: !Ref FromEmail
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Sid: UpdateEmailStatus
+              Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt AttendeesTable.Arn
+            - Sid: ConsumeTicketEmail
+              Effect: Allow
+              Action:
+                - sqs:ReceiveMessage
+                - sqs:DeleteMessage
+                - sqs:GetQueueAttributes
+              Resource: !GetAtt TicketEmailQueue.Arn
+            - Sid: SendTicketEmail
+              Effect: Allow
+              Action: ses:SendEmail
+              Resource: '*'
+              Condition:
+                StringEquals:
+                  'ses:FromAddress': !Ref FromEmail
+      Events:
+        TicketEmail:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt TicketEmailQueue.Arn
+            BatchSize: 1
+
+  RegisterErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Registration Lambda reported an error.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref RegisterFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  MailerErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Ticket mailer Lambda reported an error.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref MailerFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  TicketEmailDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Failed ticket-email messages are waiting in the DLQ.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt TicketEmailDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  ApiBaseUrl:
+    Description: Base URL of the default HTTP API stage.
+    Value: !Sub 'https://${RegistrationApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}'
+  RegistrationUrl:
+    Description: Public registration endpoint.
+    Value: !Sub 'https://${RegistrationApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/registrations'
+  AttendeesTableName:
+    Value: !Ref AttendeesTable
+  TicketEmailQueueUrl:
+    Value: !Ref TicketEmailQueue
+  TicketEmailDlqUrl:
+    Value: !Ref TicketEmailDeadLetterQueue
+  StaffUserPoolId:
+    Value: !Ref StaffUserPool
+  StaffAppClientId:
+    Value: !Ref StaffAppClient

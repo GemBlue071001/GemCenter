@@ -68,6 +68,8 @@ Trạng thái kiểm chứng: rà soát source; chưa chạy test trên AWS th�
 
 ## GC-07 — Thiếu cấu hình deploy production theo kiến trúc hiện tại
 
+**Cập nhật 2026-10-08:** Đã thêm [`template.yaml`](../template.yaml) và [hướng dẫn SAM](sam-deploy.md). Issue vẫn mở cho đến khi template được validate bằng SAM CLI, deploy staging và kiểm tra đầy đủ luồng trên AWS.
+
 **Hiện trạng:** [bootstrap.sh](../infra/bootstrap/bootstrap.sh) dành cho FLoCI: dùng endpoint giả lập, account `000000000000`, token được trả để test, CORS `*` và không tạo JWT authorizer cho route nhân viên. Hai tài liệu [AWS production setup](aws-production-setup.md) và [AWS Console setup](aws-console-setup.md) mô tả một phần kiến trúc cũ, chưa dựng đầy đủ SQS + mailer và có lệnh đóng gói dependency không khớp `package.json` hiện tại. Vì vậy không thể dùng nguyên bootstrap hoặc tài liệu này để deploy an toàn lên AWS thật.
 
 **Hướng xử lý:** Tạo template hạ tầng production (ưu tiên AWS SAM) gồm DynamoDB, SQS/DLQ, hai Lambda, IAM tối thiểu, HTTP API, Cognito JWT authorizer, CORS theo domain thật, log retention và alarm. Cấu hình `EVENT_ID`, `FROM_EMAIL`, queue URL; không mang các endpoint FLoCI hoặc `EXPOSE_TICKET_TOKEN=true` lên production. Cập nhật tài liệu deploy theo template.

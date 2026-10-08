@@ -1,0 +1,62 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Local SAM runtime for GemCenter functions backed by FLoCI.
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures:
+      - x86_64
+    MemorySize: 256
+    Timeout: 30
+
+Resources:
+  LocalApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: '$default'
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowHeaders:
+          - content-type
+          - authorization
+        AllowMethods:
+          - POST
+          - OPTIONS
+
+  RegisterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/register/
+      Handler: index.handler
+      Environment:
+        Variables:
+          ATTENDEES_TABLE: gemcenter-attendees
+          EVENT_ID: iti-2026
+          DYNAMODB_ENDPOINT: http://host.docker.internal:4566
+          SQS_ENDPOINT: http://host.docker.internal:4566
+          TICKET_EMAIL_QUEUE_URL: local-queue-url-overridden-by-script
+          EXPOSE_TICKET_TOKEN: 'true'
+      Events:
+        Register:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref LocalApi
+            Path: /registrations
+            Method: POST
+            PayloadFormatVersion: '2.0'
+
+  MailerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/mailer/
+      Handler: index.handler
+      Environment:
+        Variables:
+          ATTENDEES_TABLE: gemcenter-attendees
+          EVENT_ID: iti-2026
+          DYNAMODB_ENDPOINT: http://host.docker.internal:4566
+          SES_ENDPOINT: http://host.docker.internal:4566
+          FROM_EMAIL: no-reply@gemcenter.local
+          EMAIL_PREVIEW_DATA_URI: 'true'
